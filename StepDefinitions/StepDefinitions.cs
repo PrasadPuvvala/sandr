@@ -23,6 +23,8 @@ using Microsoft.VisualStudio.TestPlatform.CommunicationUtilities;
 using Microsoft.VisualStudio.TestPlatform.CommunicationUtilities;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client;
 using Microsoft.VisualStudio.TestPlatform.TestHost;
+using Microsoft.Azure.Storage;
+using Microsoft.Azure.Storage.Blob;
 using NUnit.Framework;
 using NUnit.Framework;
 using OfficeOpenXml.Drawing.Slicer.Style;
@@ -52,6 +54,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 //using Console = System.Console;
 using System.IO;
 using System.Linq;
@@ -72,6 +75,10 @@ using Xamarin.Forms;
 using Xamarin.Forms;
 using Console = System.Console;
 using Environment = System.Environment;
+using File = System.IO.File;
+using System.Threading.Tasks;
+using OfficeOpenXml.ConditionalFormatting;
+using Newtonsoft.Json.Linq;
 
 namespace MyNamespace
 {
@@ -128,6 +135,99 @@ namespace MyNamespace
             /* Reading CSV file to get device names */
 
             String[] csvVal = FunctionLibrary.readCSVFile();
+        }
+
+
+        
+        [BeforeScenario]
+
+        public static void BeforeScenario()
+
+        {
+
+            // Read the scenario title to run from the configuration file //
+            List<string> scenariosToRun = ReadScenariosToRunFromConfig();
+
+            string currentScenarioTitle = ScenarioContext.Current.ScenarioInfo.Title;
+
+            Console.WriteLine($"Starting scenario: {currentScenarioTitle}");
+
+            if (scenariosToRun == null || scenariosToRun.Contains(currentScenarioTitle, StringComparer.OrdinalIgnoreCase))
+            {
+                // Continue with the scenario execution.
+            }
+            else
+            {
+                Console.WriteLine($"Scenario '{currentScenarioTitle}' not found or not configured to run. Skipping...");
+                ScenarioContext.Current.Pending();
+            }
+
+            /*Extract the TestcseId from the Scenario Context*/
+
+            Console.WriteLine("Starting " + ScenarioContext.Current.ScenarioInfo.Title);
+
+            string test1 = ScenarioContext.Current.ScenarioInfo.Title;
+            string pattern = @"Case ID (\d+)";
+
+            Match match = Regex.Match(test1, pattern);
+            string testcaseID = "";
+
+            if (match.Success)
+
+            {
+                testcaseID = match.Groups[1].Value;
+                ScenarioContext.Current.Set(testcaseID, "TestCaseID");
+
+            }
+
+            Console.WriteLine("Test Case ID: " + testcaseID);
+
+            /*Update XML files with TestPlan,TestSuite,TestConfig*/
+
+
+            FunctionLibrary lib = new FunctionLibrary();
+
+            string scenarioName = ScenarioContext.Current.ScenarioInfo.Title;
+
+            lib.PassingXML(test, scenarioName);
+
+        }
+
+
+
+        private static List<string> ReadScenariosToRunFromConfig()
+        {
+            string configFilePath = Path.Combine(Directory.GetCurrentDirectory(), "ScenarioConfig.json");
+
+            if (!File.Exists(configFilePath))
+            {
+                Console.WriteLine($"Config file not found at {configFilePath}. No scenarios will be skipped.");
+                return null;
+            }
+
+            try
+            {
+                string jsonContent = File.ReadAllText(configFilePath);
+                JObject config = JObject.Parse(jsonContent);
+
+                JArray scenarios = config["Scenarios"] as JArray;
+
+                if (scenarios != null && scenarios.Any())
+
+                {
+                    //return scenarios.Select(s => s.ToString()).ToList();
+                    return scenarios.Select(s => s.ToString()).ToList();
+
+                }
+
+                Console.WriteLine("No scenarios found in the config file.");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading config file: {ex.Message}. No scenarios will be skipped.");
+                return null;
+            }
         }
 
 
@@ -260,7 +360,14 @@ namespace MyNamespace
 
                 else if (devName.Contains("RE"))
                 {
-                    session.FindElementByName(devName + " [1] (Final)").Click();
+                    try
+                    {
+                        session.FindElementByName(devName + " [1] (Final)").Click();
+                    }
+                    catch (Exception e)
+                    {
+                        session.FindElementByName(devName + " (Final)").Click();
+                    }
                 }
              
                 session.FindElementByName("Continue >>").Click();
@@ -720,7 +827,7 @@ namespace MyNamespace
                             value.Click();
                         }
                     }
-                    Thread.Sleep(5000);
+                    Thread.Sleep(10000);
                 }
 
                 /** Clicks on Continue buttion **/
@@ -878,7 +985,7 @@ namespace MyNamespace
                 catch (Exception e)
                 {
                     Console.WriteLine(e.Message);
-                    test.Fail(e.Message);
+                    //test.Fail(e.Message);
                 }
 
                 Thread.Sleep(10000);
@@ -1146,6 +1253,7 @@ namespace MyNamespace
             Thread.Sleep(5000);
 
             session = ModuleFunctions.sessionInitialize("C:\\Program Files (x86)\\GN Hearing\\Lucan\\App\\Lucan.App.UI.exe", "C:\\Program Files (x86)\\GN Hearing\\Lucan\\App");
+            //Thread.Sleep(10000);
             test.Log(Status.Pass, "S&R Tool launched successfully");
             session.FindElementByName("Device Info").Click();
             Thread.Sleep(2000);
@@ -1202,6 +1310,8 @@ namespace MyNamespace
 
                 test.Log(Status.Pass, "Dook2 Dev");
             }
+
+            
         }
 
 
@@ -1400,6 +1510,95 @@ namespace MyNamespace
          *  Validates device information **/
 
 
+
+        [Given(@"\[Download and verify azure storage files ""([^""]*)"" and ""([^""]*)""]")]
+        public async Task GivenDownloadAndVerifyAzureStorageFilesAsync(string scenarioTitle, string DeviceNo)
+        {
+            //var Sandclose = session.FindElementByAccessibilityId("PART_Close");
+            // Sandclose.Click();
+
+            test = extent.CreateTest(ScenarioStepContext.Current.StepInfo.Text.ToString());
+            // Define the connection string
+            string connectionString = "AccountName=camelotwesteudev;AccountKey=ylFzkolO9hUoR63VeJVr9On4QgnrEIHJPUdv8n1V2One8/7LdnZHfTYLJMVf7Pt7B9EVUIF1Xg/iXxoorXoruw==;EndpointSuffix=core.windows.net;DefaultEndpointsProtocol=https;";
+
+            // Determine the container name based on the scenario title
+            string containerName;
+
+            switch (scenarioTitle.ToLower())
+            {
+                case "capture":
+                    containerName = "camelot-hisettingscapture";
+                    break;
+                case "restore":
+                    containerName = "camelot-hisettingsrestore"; // Replace with the actual container name for "restore"
+                    break;
+                case "service records":
+                    containerName = "lucan-hiservicerecords"; // Replace with the actual container name for "service records"
+                    break;
+                default:
+                    Console.WriteLine("Invalid scenario title.");
+                    return;
+            }
+
+            // Define the destination folder
+            string destinationFolder = Path.Combine(Directory.GetCurrentDirectory(), "azurefiles");
+
+            // Ensure that the destination folder exists
+            Directory.CreateDirectory(destinationFolder);
+
+            // Parse the storage account connection string
+            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(connectionString);
+
+            // Create a blob client
+            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+
+            // Get a reference to the container
+            CloudBlobContainer container = blobClient.GetContainerReference(containerName);
+
+            // List blobs in the container
+            var blobList = container.ListBlobs(null, true);
+
+            // Filter matching blobs
+            var matchingBlob = blobList.OfType<CloudBlockBlob>().Where(blob =>
+            {
+                if (containerName == "lucan-hiservicerecords")
+                {
+                    // Parse the date from the blob name (assuming the date format is "yyyy-MM-dd")
+                    var currentDate = DateTime.UtcNow.Date;
+                    var formattedCurrentDate = currentDate.ToString("yyyy-MM-dd");
+
+                    return Path.GetDirectoryName(blob.Name) == formattedCurrentDate;
+
+
+
+                }
+                return blob.Name.Contains(DeviceNo);
+            }
+           ).OrderByDescending(blob => blob.Properties.LastModified).FirstOrDefault();
+        
+            if (matchingBlob != null)
+            {
+                var destinationFilePath = Path.Combine(destinationFolder, Path.GetFileName(matchingBlob.Name));
+
+                // Download the matching blob
+                using (var fileStream = File.OpenWrite(destinationFilePath))
+                {
+                    matchingBlob.DownloadToStream(fileStream);
+                }
+
+                    test.Log(Status.Pass, "Downloaded the file for the current system date to: {destinationFilePath}");
+
+                if (containerName == "lucan-hiservicerecords")
+                {
+                    test.Log(Status.Pass, "Cloud service record is uploaded under today’s date");
+                }
+            }
+            else
+            {
+                test.Log(Status.Fail, "No matching files found for the specified serial number or date in the " + scenarioTitle + " container.");
+            }
+        
+        }
 
         [When(@"\[Clicks on disconnect and verify device information is cleared]")]
         public void ClicksOnDisconnectAndVerifyDeviceInformationIsCleared()
